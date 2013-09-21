@@ -1,0 +1,303 @@
+eP64 Data Sheet Memo
+
+Samuel A. Falvo II
+
+2013-Sep-20
+
+Features
+- Flat, 1MW address space
+- MS0 Load/Store Stack Architecture
+- 64-Bit Memory Accessors
+- 64-Bit Internal Architecture
+- All Instructions Execute in 1 Clock Cycle
+- Wishbone Bus Compatible
+- Easy to Program
+
+# Introduction
+
+The eP64 architecture specifies a very simple, yet reasonably high performance, 64-bit microprocessor.  It provides a simple, dual-stack machine model suitable for both deep-embedded and general purpose application needs.  It provides one stack for expression evaluation (called the "parameter stack"), which is actually 65-bits wide, and another stack holding loop counters and return addresses (called the "return stack").  It provides 32 core instructions, and up to 32 additional, platform-specific instructions.  The eP64 described in this document can theoretically address 2^62 64-bit words of memory, providing an equivalent memory capacity 16-times that of other, contemporary 64-bit CPUs.  Byte-banding, enforced by the processor logic itself, provides sub-word addressing capability.  Note that practical implementations of this CPU will almost certainly support fewer than 62 address bits.
+
+The eP64 architecture inherits many design characteristics from the eP32 architecture developed at Offete, Inc. by Dr. Ting.  The Kestrel project is indebted to Dr. Ting for letting us enhance and relicense his core design as appropriate for supporting Kestrel 3 development efforts.
+
+## Addressing
+
+The eP64 core architecture offers only one kind of addressing: native word addressing.  However, an extension to the core architecture allows another form of addressing: sub-word addressing.
+
+Native word addressing provides theoretical access to up to 2^65 words of memory, granting in effect up to 2.95x10^20 8-bit bytes of memory, or about 16 times the address space of most other contemporary 64-bit CPUs.  Concrete implementations of the processor will likely have significantly fewer than 65 address bits to memory.
+
+Sub-word addressing allows applications to manipulate 32-, 16-, and 8-bit words within a buffer.  Buffers are pointed at by a normal word address, anywhere in the CPU's address space.  All sub-word accesses are unsigned unless otherwise specified.
+
+## Data Types
+
+The eP64 core architecture directly supports one data type: the 64-bit word.  The most basic addressing unit on the eP64 is also a single 64-bit word.
+
+When addressing 64-bit words, all address bits are significant.  Hence, no alignment issues exist with the core architecture.  Two pointers $AAAA and $AAAB each refer to adjacent, but different, 64-bit words of memory.
+
+When addressing smaller units, a word-address serves as the base address; a 65-bit offset serves to address inside a buffer established by the base address.  The size of the sub-word unit and the interpretation of the offset itself will depend upon on upper-most offset bits.  Buffers of up to 2^59 8-bit bytes are supported.
+
+# Internal Architecture
+
+## Parameter Stack
+
+The parameter stack provides the working storage and the means for expression evaluation.  The eP64 can hold up to 17 65-bit words of data at any given time, arranged as a stack, labelled S15 to S0, and T for the top-most stack item.  Only one core instruction, LIT, can push data onto the stack.  Two extension instructions exist for in-line literals, 6-bit and 12-bit, respectively.  All other instructions either replace T directly or consume data from the stack on an as-needed basis. S0 to S15 implement a ring buffer; as items are popped off the stack, the value in S0 wraps around to S15.
+
+While having 17 stack items might seem like a luxury, be aware that some of these stack items will be required to switch from your problem program to interrupt handler and back again.  Thus, applications must never depend on the sanctity of all 17 parameter stack values.  From the perspective of the problem program, the bottom-most S registers may appear to change at any time.  This is no different than in RISC processors with large numbers of registers, such as MIPS and PowerPC architectures, where some registers are expressly reserved for use by the operating system and/or language run-time environment.
+
+## Instruction Register
+
+The instruction register holds the most recently fetched package of instructions.  Since eP64 opcodes consume only 6 bits in memory, the eP64 packs eleven instructions per instruction word, as illustrated below.
+
+63     57     51     45     39     33     27     21     15     09     03
+aaaaaa bbbbbb cccccc dddddd eeeeee ffffff gggggg hhhhhh iiiiii jjjjjj xxxx
+    58     52     46     40     34     28     22     16     10     04   00
+
+Each field is called a slot.  Slots a, b, c, d, e, f, g, h, i, and j comprise valid opcode slots, executed in-order, left to right.  Field x is ignored by the instruction decoder, and must be set to %0000 for future compatibility.
+
+The eP64 fetches a new instruction word if it detects that all remaining opcodes are NOP instructions.  This includes the case where all four slots explicitly contain NOPs.
+
+## Instructions
+
+Most instructions that do not adjust program control flow fill a single slot.  However, two- and three-slot instructions exist as well.  Note that all control-flow instructions consume 9 slots (slots B through J), and thus must reside in slot A.  Slot X is always ignored.
+
+## Program Counter
+
+The P register holds the location of the next program literal or instruction word for the eP64 to consume.  It can be as wide as 64 bits, depending on the concrete implementation of the eP64 architecture.
+
+## T-Counter
+
+This internal register controls when the processor should fetch an instruction word, when it is safe to perform non-program memory references, et. al.  In essence, it determines which slot in the instruction register is currently being executed, while defining extra "pseudo-slots" for handling reset logic, interrupts, instruction fetching, etc.
+
+## Control and Random Logic
+The random logic portion of the processor interprets the currently executing instruction, if any, the T-counter, as well as the current state of any bus trans- action in progress to decide how best to proceed. It can either fetch another instruction word, advance to the next, delay the current bus transaction until some external device says it's OK to proceed, etc.
+
+# Core Instruction Set
+
+			000...	001...	010...	011...
+...000		NOP		LDRP	COM		POP
+...001		BRA		LDXP	SHL		TX
+...010		BZ		LDI		SHR		DUP
+...011		BC		LDX		MULS	OVER
+...100		CALL	OR		XOR		PUSH
+...101		RFS		STXP	AND		XT
+...110		NEXT	RR8		DIVS	
+...111		TIMES	STX		ADD		DROP
+
+## NOP (0)
+
+Does nothing for one cycle.
+
+## BRA (1) (slot A)
+
+PC := PC + IR[57:4]
+REFETCH
+
+## BZ (2) (slot A)
+
+IF T=0 THEN PC := PC + IR[57:4] ELSE PC := PC + 1
+REFETCH
+
+## BC (3) (slot A)
+
+IF T[64]=1 THEN PC := PC + IR[57+4] ELSE PC := PC + 1
+REFETCH
+
+## CALL (4) (slot A)
+
+PUSH PC ONTO R;
+PC := PC + IR[57:4]
+REFETCH
+
+## RFS (5)
+
+POP R INTO PC
+REFETCH
+
+## NEXT (6)
+
+IF R=0
+	THEN PC := PC + 1
+	ELSE R := R - 1
+	     PC := PC + IR[57:4]
+REFETCH
+
+## TIMES (7)
+
+IF R=0
+	THEN PC := PC + 1
+	ELSE R := R - 1
+	     PC := PC - 1
+REFETCH
+
+## LDRP (8)
+
+PUSH T ONTO S0
+T := MEM(R)
+R := R + 1
+
+## LDXP (9)
+
+PUSH T ONTO S0
+T := MEM(X)
+X := X + 1
+
+## LDI (10)
+
+PUSH T ONTO S0
+T := MEM(PC)
+PC := PC + 1
+
+## LDX (11)
+
+PUSH T ONTO S0
+T := MEM(X)
+
+## OR (12)
+
+T := T | S0
+POP S1 INTO S0
+
+## STXP (13)
+
+MEM(X) := T
+POP S INTO T
+
+## RR8 (14)
+
+T := (T >> 8) | (T << 25)
+
+## STX (15)
+
+MEM(X) := T
+POP S INTO T
+
+## COM (16)
+
+T := $1FFFFFFFFFFFFFFFF ^ T
+
+## SHL (17)
+
+T := T << 1
+
+## SHR (18)
+
+T := T / 2 (preserves sign)
+
+## MULS (19)
+
+IF X[0]=1 THEN T:=T+S
+T:X := T:X >> 1
+
+## XOR (20)
+
+T := T ^ S
+POP S INTO S0
+
+## AND (21)
+
+T := T & S
+POP S INTO S0
+
+## DIVS (22)
+
+(Make sure S[64]=0, S[63:0] is 2's compliment of divisor)
+IF T[64]=1 THEN
+	T:=T+S[63:0]
+END
+T:X := (T:X << 1) | T[64]
+
+## ADD (23)
+
+T := T + S
+POP S INTO S0
+
+## POP (24)
+
+PUSH T ONTO S
+T := R
+POP R0 ONTO R
+
+## TX (25)
+
+PUSH T ONTO S
+T := X
+
+## DUP (26)
+
+PUSH T ONTO S
+
+## OVER (27)
+
+PUSH T ONTO S
+T := S1
+
+## PUSH (28)
+
+PUSH R ONTO R0
+R := T
+POP S INTO T
+
+## XT (29)
+
+X := T
+POP S INTO T
+
+## DROP (31)
+
+POP S INTO T
+
+# Extension Instruction Set
+
+			100...	101...	110...	111...
+...000		
+...001		
+...010		
+...011		
+...100		
+...101		
+...110		
+...111		
+
+# EXAMPLES
+
+## Hello World
+
+Assumes the existance of an I/O port at a location IOPORT_TX, and some message to print at location MSG.
+
+	LDI  MSG
+	XT
+
+again:
+	LDXP
+	BZ   done
+	CALL putchar
+	BRA  again
+
+done:
+	BRA  done
+
+putchar:
+	TX
+	PUSH
+	LDI  IOPORT_TX
+	XT
+	STX
+	POP
+	XT
+	RFS
+
+MSG:
+	DW   "Hello world!",0
+
+
+Assembled output should look something like this:  (WARNING: UNTESTED)
+
+Hello:		29D0000000000000
+			MSG address
+again:		2400000000000000
+			0800000000000030
+			1000000000000020
+			07FFFFFFFFFFFFA0
+done:		07FFFFFFFFFFFFF0
+putchar:	65C29D3D87450000
+			IOPORT_TX address
+
