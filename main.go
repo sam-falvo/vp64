@@ -211,7 +211,7 @@ func (v *VP64) Execute() {
 	case TIMES:
 		if v.r != 0 {
 			v.r--
-			v.pc--
+			v.pc = v.ip
 			v.Fetch()
 		}
 
